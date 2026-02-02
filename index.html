@@ -1,0 +1,273 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyDialy</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            font-size: 16px; 
+            line-height: 1.5;
+            padding: 10px;
+            margin: 0;
+            background-color: #f4f4f4;
+        }
+
+        .controls {
+            position: sticky;
+            top: 0;
+            background: #f4f4f4;
+            padding: 10px 0;
+            z-index: 100;
+            border-bottom: 1px solid #ccc;
+        }
+
+        input[type="button"] {
+            padding: 10px 15px;
+            font-size: 14px;
+            margin-right: 5px;
+            cursor: pointer;
+            border: 1px solid #999;
+            background: #fff;
+            border-radius: 4px;
+        }
+
+        input[type="button"]:hover {
+            background: #e0e0e0;
+        }
+
+        .edit-active {
+            background: #ffccbc !important;
+            border-color: #ff5722 !important;
+            font-weight: bold;
+        }
+
+        /* 削除ボタン用のスタイル */
+        .btn-delete {
+            background-color: #ffebee !important;
+            color: #c62828 !important;
+        }
+
+        #pagetitle {
+            width: 150px;
+            padding: 8px;
+            font-size: 14px;
+            border: 1px solid #ccc;
+        }
+
+        #diary-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+            margin-top: 10px;
+        }
+
+        #diary-table th, #diary-table td {
+            border: 1px solid #bbb;
+            padding: 12px;
+            vertical-align: top;
+        }
+
+        [contentEditable="false"] { background-color: #fcfcfc; }
+        [contentEditable="true"] {
+            background-color: #fff;
+            outline: 2px solid #03a9f4;
+            outline-offset: -2px;
+        }
+
+        .date-col { width: 120px; }
+        .content-col { min-height: 100px; }
+        .content-col img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin-top: 5px;
+        }
+
+        #file-input { display: none; }
+    </style>
+</head>
+
+<body>
+    <div class="controls">
+        <input type="button" id="toggle-edit" value="編集モード：OFF" onclick="toggleEditing();">
+        <input type="button" value="日記を書く(行追加)" onclick="addRow();">
+        <input type="button" value="最新の行を削除" class="btn-delete" onclick="deleteTopRow();">
+        
+        <input type="button" value="画像を挿入" onclick="triggerFileInput();">
+        <input type="button" value="保存" onclick="buttonClick();">
+        <input type="button" value="全消去" onclick="clearData();">
+        <input type="text" id="pagetitle" value="MyDiary.html">
+    </div>
+
+    <input type="file" id="file-input" accept="image/*">
+
+    <div id="textarea">
+        <table id="diary-table">
+            <thead>
+                <tr>
+                    <th>日付</th>
+                    <th>日記の内容</th>
+                </tr>
+            </thead>
+            <tbody id="diary-body"></tbody>
+        </table>
+    </div>
+
+    <script type="text/javascript">
+        const diaryBody = document.getElementById('diary-body');
+        const fileInput = document.getElementById('file-input');
+        const toggleBtn = document.getElementById('toggle-edit');
+        let currentEditingElement = null;
+        let isEditable = false;
+
+        // --- IndexedDB ---
+        const dbName = "DiaryDB";
+        const storeName = "contentStore";
+        let db;
+
+        const request = indexedDB.open(dbName, 1);
+        request.onupgradeneeded = (e) => {
+            e.target.result.createObjectStore(storeName);
+        };
+        request.onsuccess = (e) => {
+            db = e.target.result;
+            loadData();
+        };
+
+        function saveData() {
+            if (!db) return;
+            const transaction = db.transaction([storeName], "readwrite");
+            const store = transaction.objectStore(storeName);
+            store.put(diaryBody.innerHTML, "mainContent");
+        }
+
+        function loadData() {
+            const transaction = db.transaction([storeName], "readonly");
+            const store = transaction.objectStore(storeName);
+            const getRequest = store.get("mainContent");
+            getRequest.onsuccess = () => {
+                if (getRequest.result) {
+                    diaryBody.innerHTML = getRequest.result;
+                } else {
+                    addRow();
+                }
+                updateEditableState();
+            };
+        }
+
+        setInterval(saveData, 3000);
+        window.onbeforeunload = saveData;
+
+        // --- 機能追加: 1番上の行を削除 ---
+        function deleteTopRow() {
+            const firstRow = diaryBody.firstElementChild;
+            if (firstRow) {
+                if (confirm("1番上の行（最新の日記）を削除してもよろしいですか？")) {
+                    diaryBody.removeChild(firstRow);
+                    saveData(); // 削除直後に保存
+                }
+            } else {
+                alert("削除する行がありません。");
+            }
+        }
+
+        // --- 既存機能 ---
+        function toggleEditing() {
+            isEditable = !isEditable;
+            updateEditableState();
+            if(!isEditable) saveData();
+        }
+
+        function updateEditableState() {
+            const cells = diaryBody.querySelectorAll('td');
+            cells.forEach(cell => cell.contentEditable = isEditable);
+            if (isEditable) {
+                toggleBtn.value = "編集モード：ON";
+                toggleBtn.classList.add('edit-active');
+            } else {
+                toggleBtn.value = "編集モード：OFF";
+                toggleBtn.classList.remove('edit-active');
+                currentEditingElement = null;
+            }
+        }
+
+        function addRow() {
+            if(!isEditable) toggleEditing();
+            const now = new Date();
+            const dateStr = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()}`;
+            const newRow = document.createElement('tr');
+            newRow.innerHTML = `
+                <td class="date-col" contentEditable="true">${dateStr}</td>
+                <td class="content-col" contentEditable="true" onfocus="setCurrentElement(this)"></td>
+            `;
+            diaryBody.insertBefore(newRow, diaryBody.firstChild);
+            newRow.cells[1].focus();
+        }
+
+        function setCurrentElement(el) { if(isEditable) currentEditingElement = el; }
+
+        function triggerFileInput() {
+            if (!isEditable || !currentEditingElement) {
+                alert("編集モードをONにし、入力欄を選択してください。");
+                return;
+            }
+            fileInput.click();
+        }
+
+        fileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = document.createElement('img');
+                img.src = event.target.result;
+                img.style.width = "300px";
+                currentEditingElement.appendChild(img);
+                saveData();
+            };
+            reader.readAsDataURL(file);
+        });
+
+        document.addEventListener('paste', function (e) {
+            if (!isEditable || !currentEditingElement) return;
+            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            for (let item of items) {
+                if (item.kind === 'file') {
+                    const blob = item.getAsFile();
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                        const img = document.createElement('img');
+                        img.src = ev.target.result;
+                        img.style.width = "300px";
+                        currentEditingElement.appendChild(img);
+                        saveData();
+                    };
+                    reader.readAsDataURL(blob);
+                }
+            }
+        });
+
+        function buttonClick(){
+            const wasEditable = isEditable;
+            if(isEditable) toggleEditing();
+            const savehtml = new XMLSerializer().serializeToString(document);
+            const blob = new Blob([savehtml], { "type" : "text/html" });
+            let link = document.createElement('a'); 
+            link.href = URL.createObjectURL(blob);
+            link.download = document.getElementById("pagetitle").value;
+            link.click(); 
+            if(wasEditable) toggleEditing();
+        }
+
+        function clearData() {
+            if(confirm("すべて消去しますか？")) {
+                const transaction = db.transaction([storeName], "readwrite");
+                transaction.objectStore(storeName).delete("mainContent");
+                diaryBody.innerHTML = "";
+            }
+        }
+    </script>
+</body>
+</html>
