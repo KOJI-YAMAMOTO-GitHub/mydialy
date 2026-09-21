@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MyDialy</title>
+    <title>MyDiary</title>
     <style>
         body {
             font-family: sans-serif;
@@ -78,14 +78,88 @@
 
         .date-col { width: 120px; }
         .content-col { min-height: 100px; }
-        .content-col img {
-            max-width: 100%;
-            height: auto;
-            display: block;
-            margin-top: 5px;
-        }
 
         #file-input { display: none; }
+
+        /* 画像コンテナおよびリサイズ用スタイル */
+        .img-container {
+            display: inline-block;
+            position: relative;
+            margin: 8px 0;
+            user-select: none;
+            vertical-align: bottom;
+            max-width: 100%;
+        }
+
+        .img-container img {
+            display: block;
+            width: 100%;
+            height: auto;
+            border: 1px solid transparent;
+            box-sizing: border-box;
+        }
+
+        .img-container.selected img {
+            border: 2px dashed #03a9f4;
+        }
+
+        /* リサイズハンドル */
+        .resize-handle {
+            display: none;
+            position: absolute;
+            right: -6px;
+            bottom: -6px;
+            width: 12px;
+            height: 12px;
+            background: #03a9f4;
+            border: 1px solid #fff;
+            cursor: se-resize;
+            z-index: 10;
+        }
+
+        .img-container.selected .resize-handle {
+            display: block;
+        }
+
+        /* 画像用ツールバー */
+        .img-toolbar {
+            display: none;
+            position: absolute;
+            top: -36px;
+            left: 0;
+            background: #333;
+            padding: 3px 6px;
+            border-radius: 4px;
+            z-index: 20;
+            white-space: nowrap;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        .img-container.selected .img-toolbar {
+            display: flex;
+            gap: 4px;
+        }
+
+        .img-toolbar button {
+            background: #555;
+            color: #fff;
+            border: none;
+            padding: 3px 8px;
+            font-size: 11px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        .img-toolbar button:hover {
+            background: #777;
+        }
+
+        .img-toolbar button.btn-img-del {
+            background: #e53935;
+        }
+        .img-toolbar button.btn-img-del:hover {
+            background: #d32f2f;
+        }
     </style>
 </head>
 
@@ -150,6 +224,7 @@
             getRequest.onsuccess = () => {
                 if (getRequest.result) {
                     diaryBody.innerHTML = getRequest.result;
+                    attachImageEventListeners();
                 } else {
                     addRow();
                 }
@@ -173,7 +248,7 @@
             }
         }
 
-        // --- 既存機能 ---
+        // --- 編集モード制御 ---
         function toggleEditing() {
             isEditable = !isEditable;
             updateEditableState();
@@ -183,13 +258,16 @@
         function updateEditableState() {
             const cells = diaryBody.querySelectorAll('td');
             cells.forEach(cell => cell.contentEditable = isEditable);
-            if (isEditable) {
-                toggleBtn.value = "編集モード：ON";
-                toggleBtn.classList.add('edit-active');
-            } else {
+            
+            // 編集モードOFFのときは選択解除
+            if (!isEditable) {
+                deselectAllImages();
                 toggleBtn.value = "編集モード：OFF";
                 toggleBtn.classList.remove('edit-active');
                 currentEditingElement = null;
+            } else {
+                toggleBtn.value = "編集モード：ON";
+                toggleBtn.classList.add('edit-active');
             }
         }
 
@@ -216,35 +294,145 @@
             fileInput.click();
         }
 
+        // --- 画像関連のヘルパー関数 ---
+        function deselectAllImages() {
+            document.querySelectorAll('.img-container.selected').forEach(c => c.classList.remove('selected'));
+        }
+
+        function createResizableImage(src) {
+            const container = document.createElement('span');
+            container.className = 'img-container';
+            container.contentEditable = "false"; // リサイズ操作をスムーズにするためfalseに
+            container.style.width = "300px"; // 初期幅
+
+            const img = document.createElement('img');
+            img.src = src;
+
+            const handle = document.createElement('div');
+            handle.className = 'resize-handle';
+
+            const toolbar = document.createElement('div');
+            toolbar.className = 'img-toolbar';
+            toolbar.innerHTML = `
+                <button onclick="resizeImageContainer(this, '150px')">S</button>
+                <button onclick="resizeImageContainer(this, '300px')">M</button>
+                <button onclick="resizeImageContainer(this, '500px')">L</button>
+                <button onclick="resizeImageContainer(this, '100%')">100%</button>
+                <button class="btn-img-del" onclick="deleteImageContainer(this)">削除</button>
+            `;
+
+            container.appendChild(toolbar);
+            container.appendChild(img);
+            container.appendChild(handle);
+
+            setupImageContainerEvents(container, handle);
+
+            return container;
+        }
+
+        function resizeImageContainer(btn, size) {
+            const container = btn.closest('.img-container');
+            if (container) {
+                container.style.width = size;
+                saveData();
+            }
+        }
+
+        function deleteImageContainer(btn) {
+            const container = btn.closest('.img-container');
+            if (container) {
+                container.remove();
+                saveData();
+            }
+        }
+
+        function setupImageContainerEvents(container, handle) {
+            // 画像クリックで選択状態の切替
+            container.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (!isEditable) return;
+                deselectAllImages();
+                container.classList.add('selected');
+            });
+
+            // ドラッグリサイズ処理
+            let startX, startWidth;
+
+            const onMouseMove = (e) => {
+                const newWidth = Math.max(50, startWidth + (e.clientX - startX));
+                container.style.width = `${newWidth}px`;
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                saveData();
+            };
+
+            handle.addEventListener('mousedown', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (!isEditable) return;
+
+                startX = e.clientX;
+                startWidth = container.offsetWidth;
+
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        }
+
+        function attachImageEventListeners() {
+            document.querySelectorAll('.img-container').forEach(container => {
+                const handle = container.querySelector('.resize-handle');
+                if (handle) {
+                    setupImageContainerEvents(container, handle);
+                }
+            });
+        }
+
+        // ドキュメント全体クリックで画像の選択を解除
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.img-container')) {
+                deselectAllImages();
+            }
+        });
+
+        // ファイル入力からの画像挿入
         fileInput.addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = function(event) {
-                const img = document.createElement('img');
-                img.src = event.target.result;
-                img.style.width = "300px";
-                currentEditingElement.appendChild(img);
+                const imgContainer = createResizableImage(event.target.result);
+                currentEditingElement.appendChild(imgContainer);
                 saveData();
             };
             reader.readAsDataURL(file);
+            fileInput.value = ""; // 入力をリセット
         });
 
+        // クリップボードからの画像ペースト（重複防止対策済み）
         document.addEventListener('paste', function (e) {
             if (!isEditable || !currentEditingElement) return;
+
             const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            let hasImage = false;
+
             for (let item of items) {
-                if (item.kind === 'file') {
+                if (item.kind === 'file' && item.type.startsWith('image/')) {
+                    hasImage = true;
+                    e.preventDefault(); // ブラウザ標準の画像ペースト（元サイズ挿入）をキャンセル
+
                     const blob = item.getAsFile();
                     const reader = new FileReader();
                     reader.onload = (ev) => {
-                        const img = document.createElement('img');
-                        img.src = ev.target.result;
-                        img.style.width = "300px";
-                        currentEditingElement.appendChild(img);
+                        const imgContainer = createResizableImage(ev.target.result);
+                        currentEditingElement.appendChild(imgContainer);
                         saveData();
                     };
                     reader.readAsDataURL(blob);
+                    break; // 最初の1枚のみ処理
                 }
             }
         });
